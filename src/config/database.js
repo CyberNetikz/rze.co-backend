@@ -6,21 +6,34 @@
  */
 
 const knex = require('knex');
+const fs = require('fs');
+const path = require('path');
 const logger = require('../utils/logger');
 
 let db = null;
+
+// Load DO CA certificate if it exists
+let caCert;
+const caPath = path.resolve(__dirname, '../certs/ca-certificate.crt');
+if (fs.existsSync(caPath)) {
+  caCert = fs.readFileSync(caPath).toString();
+}
 
 // Knex configuration
 const getKnexConfig = () => ({
   client: 'pg',
   connection: (() => {
     if (process.env.DATABASE_URL) {
+      // Use connection string + SSL CA for DO managed DB
       return {
         connectionString: process.env.DATABASE_URL,
-        ssl: { rejectUnauthorized: false }
+        ssl: caCert
+          ? { ca: caCert, rejectUnauthorized: true } // secure connection
+          : { rejectUnauthorized: false },          // fallback
       };
     }
 
+    // Local or individual credentials
     return {
       host: process.env.DATABASE_HOST || 'localhost',
       port: parseInt(process.env.DATABASE_PORT) || 5432,
@@ -28,7 +41,7 @@ const getKnexConfig = () => ({
       user: process.env.DATABASE_USER || 'rze_admin',
       password: process.env.DATABASE_PASSWORD,
       ssl: process.env.NODE_ENV === 'production'
-        ? { rejectUnauthorized: false }
+        ? { rejectUnauthorized: false } // For production without CA
         : false
     };
   })(),
@@ -45,7 +58,6 @@ const getKnexConfig = () => ({
   acquireConnectionTimeout: 10000
 });
 
-
 const database = {
   /**
    * Connect to the database
@@ -53,18 +65,18 @@ const database = {
   async connect() {
     try {
       db = knex(getKnexConfig());
-      
+
       // Test the connection
       await db.raw('SELECT 1');
       logger.info('Database connection established');
-      
+
       return db;
     } catch (error) {
       logger.error('Failed to connect to database:', error);
       throw error;
     }
   },
-  
+
   /**
    * Get the database instance
    */
@@ -74,7 +86,7 @@ const database = {
     }
     return db;
   },
-  
+
   /**
    * Check if database is connected
    */
@@ -83,11 +95,11 @@ const database = {
       if (!db) return false;
       await db.raw('SELECT 1');
       return true;
-    } catch (error) {
+    } catch {
       return false;
     }
   },
-  
+
   /**
    * Disconnect from the database
    */
@@ -98,7 +110,7 @@ const database = {
       logger.info('Database connection closed');
     }
   },
-  
+
   /**
    * Run a transaction
    */
