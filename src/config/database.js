@@ -13,10 +13,14 @@ const logger = require('../utils/logger');
 let db = null;
 
 // Load DO CA certificate if it exists
-let caCert;
 const caPath = path.resolve(__dirname, '../certs/ca-certificate.crt');
+let caCert;
+
 if (fs.existsSync(caPath)) {
   caCert = fs.readFileSync(caPath).toString();
+  console.log('✅ CA certificate loaded successfully. Length:', caCert.length);
+} else {
+  console.warn('⚠️ CA certificate not found at:', caPath);
 }
 
 // Knex configuration
