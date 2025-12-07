@@ -13,14 +13,25 @@ let db = null;
 // Knex configuration
 const getKnexConfig = () => ({
   client: 'pg',
-  connection: process.env.DATABASE_URL || {
-    host: process.env.DATABASE_HOST || 'localhost',
-    port: parseInt(process.env.DATABASE_PORT) || 5432,
-    database: process.env.DATABASE_NAME || 'rze_trading',
-    user: process.env.DATABASE_USER || 'rze_admin',
-    password: process.env.DATABASE_PASSWORD,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-  },
+  connection: (() => {
+    if (process.env.DATABASE_URL) {
+      return {
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false }
+      };
+    }
+
+    return {
+      host: process.env.DATABASE_HOST || 'localhost',
+      port: parseInt(process.env.DATABASE_PORT) || 5432,
+      database: process.env.DATABASE_NAME || 'rze_trading',
+      user: process.env.DATABASE_USER || 'rze_admin',
+      password: process.env.DATABASE_PASSWORD,
+      ssl: process.env.NODE_ENV === 'production'
+        ? { rejectUnauthorized: false }
+        : false
+    };
+  })(),
   pool: {
     min: 2,
     max: 10,
@@ -33,6 +44,7 @@ const getKnexConfig = () => ({
   },
   acquireConnectionTimeout: 10000
 });
+
 
 const database = {
   /**
