@@ -58,21 +58,50 @@ const getKnexConfig = () => ({
 });
 
 const database = {
+  /**
+   * Connect to the database
+   */
   async connect() {
     try {
       db = knex(getKnexConfig());
+      
+      // Test the connection
       await db.raw('SELECT 1');
       logger.info('Database connection established');
+      
       return db;
     } catch (error) {
       logger.error('Failed to connect to database:', error);
       throw error;
     }
   },
+  
+  /**
+   * Get the database instance
+   */
   getDb() {
-    if (!db) throw new Error('Database not initialized. Call connect() first.');
+    if (!db) {
+      throw new Error('Database not initialized. Call connect() first.');
+    }
     return db;
   },
+  
+  /**
+   * Check if database is connected
+   */
+  async checkConnection() {
+    try {
+      if (!db) return false;
+      await db.raw('SELECT 1');
+      return true;
+    } catch (error) {
+      return false;
+    }
+  },
+  
+  /**
+   * Disconnect from the database
+   */
   async disconnect() {
     if (db) {
       await db.destroy();
@@ -80,6 +109,10 @@ const database = {
       logger.info('Database connection closed');
     }
   },
+  
+  /**
+   * Run a transaction
+   */
   async transaction(callback) {
     return db.transaction(callback);
   }
