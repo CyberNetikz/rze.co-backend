@@ -13,7 +13,7 @@ const logger = require('../utils/logger');
 let db = null;
 
 // Load DO CA certificate if it exists
-const caPath = path.resolve(__dirname, '../certs/ca-certificate.crt');
+const caPath = path.resolve(__dirname, './certs/ca-certificate.crt');
 let caCert;
 
 if (fs.existsSync(caPath)) {
