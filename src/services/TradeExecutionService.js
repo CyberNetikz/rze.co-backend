@@ -116,7 +116,7 @@ class TradeExecutionService {
       const entryOrder = await AlpacaService.placeLimitBuyOrder(
         symbol.toUpperCase(),
         totalShares,
-        entryPrice,
+        Number(entryPrice),
         clientOrderId
       );
       
