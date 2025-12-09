@@ -294,7 +294,7 @@ class AlpacaService {
         type: 'limit',
         time_in_force: 'gtc',
         limit_price: limitPrice.toFixed(2),
-        extended_hours: true
+        extended_hours: false
       };
 
       if (clientOrderId) {
