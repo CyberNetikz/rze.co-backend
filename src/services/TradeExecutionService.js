@@ -64,7 +64,7 @@ class TradeExecutionService {
       }
       
       // 8. Create trade record
-      const [tradeId] = await db('trades').insert({
+      const [[{ id: tradeId }]] = await db('trades').insert({
         trade_uuid: tradeUuid,
         symbol: symbol.toUpperCase(),
         company_name: asset.name,
