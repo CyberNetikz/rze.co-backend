@@ -9,6 +9,7 @@ const router = express.Router();
 const database = require('../../config/database');
 const logger = require('../../utils/logger');
 
+
 /**
  * GET /api/history
  * Get trade history with filters
@@ -17,7 +18,7 @@ router.get('/', async (req, res) => {
   try {
     const db = database.getDb();
     const { 
-      status = 'completed',
+      status = 'active',
       result, // 'win' or 'loss'
       symbol,
       startDate,
@@ -111,7 +112,7 @@ router.get('/summary', async (req, res) => {
     const db = database.getDb();
     const { startDate, endDate } = req.query;
     
-    let query = db('trades').where('status', 'completed');
+    let query = db('trades').where('status', 'active');
     
     if (startDate) {
       query = query.where('exit_time', '>=', startDate);
@@ -198,7 +199,7 @@ router.get('/by-phase', async (req, res) => {
     const db = database.getDb();
     
     const phaseStats = await db('trades')
-      .where('status', 'completed')
+      .where('status', 'active')
       .groupBy('exit_phase')
       .select('exit_phase')
       .count('* as count')
@@ -234,7 +235,7 @@ router.get('/by-symbol', async (req, res) => {
     const { limit = 20 } = req.query;
     
     const symbolStats = await db('trades')
-      .where('status', 'completed')
+      .where('status', 'active')
       .groupBy('symbol')
       .select('symbol')
       .count('* as count')
@@ -244,7 +245,7 @@ router.get('/by-symbol', async (req, res) => {
     // Calculate win rate for each symbol
     const formattedStats = await Promise.all(symbolStats.map(async (ss) => {
       const wins = await db('trades')
-        .where({ status: 'completed', symbol: ss.symbol })
+        .where({ status: 'active', symbol: ss.symbol })
         .where('realized_pnl', '>', 0)
         .count('* as count')
         .first();
@@ -284,7 +285,7 @@ router.get('/daily', async (req, res) => {
     startDate.setDate(startDate.getDate() - parseInt(days));
     
     const trades = await db('trades')
-      .where('status', 'completed')
+      .where('status', 'active')
       .where('exit_time', '>=', startDate.toISOString())
       .orderBy('exit_time', 'asc');
     
