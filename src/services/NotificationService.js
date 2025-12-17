@@ -84,7 +84,7 @@ class NotificationService {
       const effectiveChannel = channel || 'slack';
       
       // Record notification
-      const [notificationId] = await db('notifications').insert({
+      const [{ id: notificationId }] = await db('notifications').insert({
         trade_id: tradeId,
         type,
         title,

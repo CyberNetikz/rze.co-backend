@@ -35,9 +35,10 @@ function getDbConfig() {
       database: dbUrl.pathname.replace('/', ''),
       user: dbUrl.username,
       password: dbUrl.password,
-      ssl: caCert
-        ? { ca: caCert, rejectUnauthorized: true }
-        : { rejectUnauthorized: false }
+      // ssl: caCert
+      //   ? { ca: caCert, rejectUnauthorized: true }
+      //   : { rejectUnauthorized: false }
+      ssl : { rejectUnauthorized: false }
     };
   }
 
@@ -193,7 +194,7 @@ async function migrate() {
         'pending_cancel',
         'partially_filled',
         'filled',
-        'cancelled',
+        'canceled',
         'rejected',
         'expired',
         'replaced'

@@ -150,6 +150,8 @@ class TradeMonitor {
       const orderId = update.order.id;
       const event = update.event;
       const order = update.order;
+
+      console.log('Trade Order[handleOrderUpdate] ', order)
       
       // Find our order record
       const dbOrder = await db('orders')
