@@ -348,6 +348,7 @@ class TradeMonitor {
     // Sync every 30 seconds as backup
     this.syncInterval = setInterval(async () => {
       try {
+        console.log("Periodic sync Started...");
         await this.syncOrders();
       } catch (error) {
         logger.error('Periodic sync error:', error);
@@ -366,13 +367,17 @@ class TradeMonitor {
     const dbOrders = await db('orders')
       .whereIn('status', ['new', 'accepted', 'pending_new', 'partially_filled'])
       .select('*');
+
     
     if (dbOrders.length === 0) return;
+
+    console.log(dbOrders, "dbOrders");
     
     // Get orders from Alpaca
     const alpacaOrders = await AlpacaService.getOrders('all', 500);
     const alpacaOrderMap = new Map(alpacaOrders.map(o => [o.id, o]));
-    
+    console.log(alpacaOrders, "alpacaOrders");
+    console.log(alpacaOrderMap, "alpacaOrderMap");
     // Check each DB order
     for (const dbOrder of dbOrders) {
       const alpacaOrder = alpacaOrderMap.get(dbOrder.alpaca_order_id);
