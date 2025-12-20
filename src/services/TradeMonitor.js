@@ -433,7 +433,7 @@ class TradeMonitor {
     const alpacaOrders = await AlpacaService.getOrders("all", 500);
     const alpacaOrderMap = new Map(alpacaOrders.map((o) => [o.id, o]));
     console.log(alpacaOrders, "alpacaOrders");
-    console.log(alpacaOrderMap, "alpacaOrderMap");
+    // console.log(alpacaOrderMap, "alpacaOrderMap");
     // Check each DB order
     for (const dbOrder of dbOrders) {
       const alpacaOrder = alpacaOrderMap.get(dbOrder.alpaca_order_id);
