@@ -195,6 +195,7 @@ async function migrate() {
         'partially_filled',
         'filled',
         'canceled',
+        'cancelled',
         'rejected',
         'expired',
         'replaced'

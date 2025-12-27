@@ -638,14 +638,14 @@ class TradeExecutionService {
         throw new Error(`Trade ${tradeId} not found`);
       }
 
-      if (trade.status === "completed" || trade.status === "canceled") {
+      if (trade.status === "completed" || trade.status === "cancelled") {
         throw new Error(`Trade ${tradeId} is already ${trade.status}`);
       }
 
       // Cancel all orders
       const orders = await db("orders")
         .where({ trade_id: tradeId })
-        .whereNotIn("status", ["filled", "canceled"]);
+        .whereNotIn("status", ["filled", "cancelled"]);
 
       for (const order of orders) {
         try {
@@ -658,12 +658,12 @@ class TradeExecutionService {
         }
         await db("orders")
           .where("id", order.id)
-          .update({ status: "canceled" });
+          .update({ status: "cancelled" });
       }
 
       // Update trade
       await db("trades").where("id", tradeId).update({
-        status: "canceled",
+        status: "cancelled",
         exit_reason: "manual",
         exit_time: db.fn.now(),
         updated_at: db.fn.now(),
