@@ -663,7 +663,7 @@ class TradeExecutionService {
 
       // Update trade
       await db("trades").where("id", tradeId).update({
-        status: "cancelled",
+        status: "canceled",
         exit_reason: "manual",
         exit_time: db.fn.now(),
         updated_at: db.fn.now(),
