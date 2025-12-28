@@ -404,6 +404,8 @@ class TradeMonitor {
 
       if (marketClock && marketClock.marketOpen === false) {
         logger.warn("📉 Market is CLOSED — orders may not fill");
+      }else{
+        logger.info("📈 Market is OPEN");
       }
       try {
         await this.syncOrders();
