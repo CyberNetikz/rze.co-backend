@@ -402,7 +402,7 @@ class TradeMonitor {
       // 👀 Log market open/close status
       const marketClock = await this.logMarketStatus();
 
-      if (marketClock && marketClock.is_open === false) {
+      if (marketClock && marketClock.marketOpen === false) {
         logger.warn("📉 Market is CLOSED — orders may not fill");
       }
       try {
