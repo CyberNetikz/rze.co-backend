@@ -12,81 +12,148 @@ const logger = require('../../utils/logger');
 
 /**
  * GET /api/history
- * Get trade history with filters
+ * Get trade history with filters (ALL STATUSES)
  */
 router.get('/', async (req, res) => {
   try {
     const db = database.getDb();
-    const { 
-      status = 'completed',
-      result, // 'win' or 'loss'
+    const {
+      status,                // OPTIONAL now
+      result,                // win | loss (only for completed)
       symbol,
       startDate,
       endDate,
       limit = 50,
       offset = 0,
-      sortBy = 'exit_time',
+      sortBy = 'updated_at',
       sortOrder = 'desc'
     } = req.query;
-    
-    let query = db('trades').where('status', status);
-    
-    // Filter by result (win/loss)
-    if (result === 'win') {
-      query = query.where('realized_pnl', '>', 0);
-    } else if (result === 'loss') {
-      query = query.where('realized_pnl', '<=', 0);
+
+    let query = db('trades');
+
+    /**
+     * Trade status filter (optional)
+     * If not provided → return ALL trades
+     */
+    if (status) {
+      query = query.where('status', status);
     }
-    
-    // Filter by symbol
+
+    /**
+     * Result filter only applies to completed trades
+     */
+    if (result === 'win') {
+      query = query
+        .where('status', 'completed')
+        .where('realized_pnl', '>', 0);
+    } else if (result === 'loss') {
+      query = query
+        .where('status', 'completed')
+        .where('realized_pnl', '<=', 0);
+    }
+
+    // Symbol filter
     if (symbol) {
       query = query.where('symbol', symbol.toUpperCase());
     }
-    
-    // Filter by date range
+
+    // Date filters (use exit_time if exists, fallback to updated_at)
     if (startDate) {
-      query = query.where('exit_time', '>=', startDate);
+      query = query.where('updated_at', '>=', startDate);
     }
     if (endDate) {
-      query = query.where('exit_time', '<=', endDate);
+      query = query.where('updated_at', '<=', endDate);
     }
-    
+
     // Sorting
-    const validSortColumns = ['exit_time', 'entry_time', 'realized_pnl', 'symbol'];
-    const sortColumn = validSortColumns.includes(sortBy) ? sortBy : 'exit_time';
+    const validSortColumns = [
+      'exit_time',
+      'entry_time',
+      'updated_at',
+      'realized_pnl',
+      'symbol'
+    ];
+
+    const sortColumn = validSortColumns.includes(sortBy)
+      ? sortBy
+      : 'updated_at';
+
     const order = sortOrder === 'asc' ? 'asc' : 'desc';
-    
-    // Get total count
-    const countQuery = query.clone();
-    const [{ count }] = await countQuery.count('* as count');
-    
-    // Get paginated results
+
+    // Total count
+    const [{ count }] = await query.clone().count('* as count');
+
+    // Fetch trades
     const trades = await query
       .orderBy(sortColumn, order)
       .limit(parseInt(limit))
       .offset(parseInt(offset));
-    
-    // Format results
-    const formattedTrades = trades.map(trade => ({
-      id: trade.id,
-      trade_uuid: trade.trade_uuid,
-      symbol: trade.symbol,
-      company_name: trade.company_name,
-      entry_price: parseFloat(trade.entry_price),
-      position_size: parseFloat(trade.position_size),
-      total_shares: trade.total_shares,
-      exit_phase: trade.exit_phase,
-      exit_reason: trade.exit_reason,
-      realized_pnl: parseFloat(trade.realized_pnl),
-      realized_pnl_pct: parseFloat(trade.realized_pnl_pct),
-      result: parseFloat(trade.realized_pnl) > 0 ? 'win' : 'loss',
-      entry_time: trade.entry_time,
-      exit_time: trade.exit_time,
-      duration_minutes: trade.entry_time && trade.exit_time
-        ? Math.round((new Date(trade.exit_time) - new Date(trade.entry_time)) / 60000)
-        : null
+
+    /**
+     * Attach order summary per trade
+     */
+    const formattedTrades = await Promise.all(trades.map(async (trade) => {
+      const orderStats = await db('orders')
+        .where('trade_id', trade.id)
+        .select('status');
+
+      const summary = {
+        total: orderStats.length,
+        filled: 0,
+        open: 0,
+        canceled: 0
+      };
+
+      orderStats.forEach(o => {
+        if (o.status === 'filled') summary.filled++;
+        else if (['canceled', 'cancelled', 'rejected', 'expired'].includes(o.status)) {
+          summary.canceled++;
+        } else {
+          summary.open++;
+        }
+      });
+
+      const isCompleted = trade.status === 'completed';
+      const realizedPnl = parseFloat(trade.realized_pnl || 0);
+
+      return {
+        id: trade.id,
+        trade_uuid: trade.trade_uuid,
+        symbol: trade.symbol,
+        company_name: trade.company_name,
+
+        trade_status: trade.status,
+
+        entry_price: parseFloat(trade.entry_price),
+        position_size: parseFloat(trade.position_size),
+        total_shares: trade.total_shares,
+
+        exit_phase: trade.exit_phase,
+        exit_reason: trade.exit_reason,
+
+        realized_pnl: isCompleted ? realizedPnl : null,
+        realized_pnl_pct: isCompleted
+          ? parseFloat(trade.realized_pnl_pct)
+          : null,
+
+        result: isCompleted
+          ? (realizedPnl > 0 ? 'win' : 'loss')
+          : null,
+
+        entry_time: trade.entry_time,
+        exit_time: trade.exit_time,
+
+        duration_minutes:
+          trade.entry_time && trade.exit_time
+            ? Math.round(
+                (new Date(trade.exit_time) - new Date(trade.entry_time)) / 60000
+              )
+            : null,
+
+        orders: summary
+      };
     }));
-    
+
     res.json({
       trades: formattedTrades,
       pagination: {
@@ -96,7 +163,7 @@ router.get('/', async (req, res) => {
         hasMore: parseInt(offset) + formattedTrades.length < parseInt(count)
       }
     });
-    
+
   } catch (error) {
     logger.error('Error fetching history:', error);
     res.status(500).json({ error: error.message });
@@ -333,17 +400,30 @@ router.get('/events/:tradeId', async (req, res) => {
   try {
     const db = database.getDb();
     const { tradeId } = req.params;
-    
+
     const events = await db('order_events')
       .where('trade_id', tradeId)
       .orderBy('event_time', 'desc');
-    
-    res.json(events);
-    
+
+    if (events.length > 0) {
+      return res.json(events);
+    }
+
+    // Fallback to order state (important for open trades)
+    const orders = await db('orders')
+      .where('trade_id', tradeId)
+      .orderBy('updated_at', 'desc');
+
+    res.json({
+      source: 'orders',
+      data: orders
+    });
+
   } catch (error) {
     logger.error('Error fetching trade events:', error);
     res.status(500).json({ error: error.message });
   }
 });
+
 
 module.exports = router;
