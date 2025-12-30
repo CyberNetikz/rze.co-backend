@@ -20,7 +20,7 @@ class WebSocketManager {
   initialize(httpServer) {
     this.io = new Server(httpServer, {
       cors: {
-        origin: ["https://rze.co", "https://backend.rze.co"],
+        origin: ["https://rze.co", "https://backend.rze.co", "http://localhost:3000"],
         methods: ["GET", "POST"],
         credentials: true,
       },
