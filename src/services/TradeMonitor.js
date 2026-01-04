@@ -457,7 +457,7 @@ class TradeMonitor {
         // if (alpacaOrder.status === "filled" && dbOrder.status !== "filled") {
         //   await this.handleOrderFill(dbOrder, alpacaOrder);
         // }
-         if (alpacaOrder.status === "filled") {
+         if (alpacaOrder.status === "filled" && dbOrder.status !== "filled") {
           await this.handleOrderFill(dbOrder, alpacaOrder);
         }
       }
