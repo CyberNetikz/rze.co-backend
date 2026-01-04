@@ -424,7 +424,7 @@ class TradeMonitor {
 
     // Get open orders from database
     const dbOrders = await db("orders")
-      .whereIn("status", ["new", "accepted", "pending_new", "partially_filled"])
+      .whereIn("status", ["new", "accepted", "pending_new", "partially_filled","filled"])
       .select("*");
 
     if (dbOrders.length === 0) return;
