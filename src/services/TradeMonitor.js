@@ -454,7 +454,10 @@ class TradeMonitor {
         });
 
         // Handle fills that we might have missed
-        if (alpacaOrder.status === "filled" && dbOrder.status !== "filled") {
+        // if (alpacaOrder.status === "filled" && dbOrder.status !== "filled") {
+        //   await this.handleOrderFill(dbOrder, alpacaOrder);
+        // }
+         if (alpacaOrder.status === "filled") {
           await this.handleOrderFill(dbOrder, alpacaOrder);
         }
       }
