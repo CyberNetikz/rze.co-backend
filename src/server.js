@@ -158,10 +158,10 @@ async function initializeServices() {
     await TradeMonitor.start();
     logger.info("✅ Trade monitor started");
 
-     // 6. Start trade Reconciliation Service (watches for missing trade events fill)
-    logger.info("👁️ Starting trade reconciliation...");
-    await TradeReconciliationService.start();
-    logger.info("✅ Trade reconciliation started");
+    //  // 6. Start trade Reconciliation Service (watches for missing trade events fill)
+    // logger.info("👁️ Starting trade reconciliation...");
+    // await TradeReconciliationService.start();
+    // logger.info("✅ Trade reconciliation started");
 
     // 7. Start the server
     const PORT = process.env.PORT || 3001;
