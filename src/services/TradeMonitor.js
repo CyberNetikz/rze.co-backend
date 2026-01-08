@@ -437,12 +437,12 @@ class TradeMonitor {
 
     if (dbOrders.length === 0) return;
 
-    console.log(dbOrdersCount, "dbOrdersCount");
+    console.log(dbOrders.length, "dbOrdersCount");
 
     // Get orders from Alpaca
     const alpacaOrders = await AlpacaService.getOrders("all", 500);
     const alpacaOrderMap = new Map(alpacaOrders.map((o) => [o.id, o]));
-    console.log(alpacaOrdersCount, "alpacaOrdersCount");
+    console.log(alpacaOrders?.length, "alpacaOrdersCount");
     // console.log(alpacaOrderMap, "alpacaOrderMap");
     // Check each DB order
     for (const dbOrder of dbOrders) {
