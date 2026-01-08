@@ -47,7 +47,7 @@ class TradeReconciliationService {
       this.intervalMs
     );
 
-    logger.success("✅ Trade Reconciliation Service started");
+    logger.log("✅ Trade Reconciliation Service started");
     console.log("✅ Trade Reconciliation Service started");
   }
 
@@ -62,7 +62,7 @@ class TradeReconciliationService {
       this.reconcileInterval = null;
     }
 
-    logger.success("🧹 Trade Reconciliation Service stopped");
+    logger.log("🧹 Trade Reconciliation Service stopped");
     console.log("🧹 Trade Reconciliation Service stopped");
   }
 
@@ -120,7 +120,7 @@ class TradeReconciliationService {
         await this.reconcileTrade(trade, positionMap);
       }
 
-      logger.success("✅ Trade reconciliation cycle completed");
+      logger.log("✅ Trade reconciliation cycle completed");
       console.log("✅ Trade reconciliation cycle completed");
     } finally {
       this.isReconciling = false;
@@ -295,7 +295,7 @@ class TradeReconciliationService {
         });
       }
 
-      logger.success(`✅ Missed fill reconciled for ${trade.symbol}`);
+      logger.log(`✅ Missed fill reconciled for ${trade.symbol}`);
       console.log(`✅ Missed fill reconciled for ${trade.symbol}`);
 
       await NotificationService.send({
