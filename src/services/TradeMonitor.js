@@ -404,7 +404,7 @@ class TradeMonitor {
 
       if (marketClock && marketClock.marketOpen === false) {
         logger.warn("📉 Market is CLOSED — orders may not fill");
-      }else{
+      } else {
         logger.info("📈 Market is OPEN");
       }
       try {
@@ -424,7 +424,13 @@ class TradeMonitor {
 
     // Get open orders from database
     const dbOrders = await db("orders")
-      .whereIn("status", ["new", "accepted", "pending_new", "partially_filled","filled"])
+      .whereIn("status", [
+        "new",
+        "accepted",
+        "pending_new",
+        "partially_filled",
+        "filled",
+      ])
       .select("*");
 
     if (dbOrders.length === 0) return;
@@ -457,11 +463,218 @@ class TradeMonitor {
         // if (alpacaOrder.status === "filled" && dbOrder.status !== "filled") {
         //   await this.handleOrderFill(dbOrder, alpacaOrder);
         // }
-         if (alpacaOrder.status === "filled" && dbOrder.status !== "filled") {
+        if (alpacaOrder.status === "filled" && dbOrder.status !== "filled") {
           await this.handleOrderFill(dbOrder, alpacaOrder);
+        }
+
+        // 🆕 Handle canceled phase_tp orders - auto re-place them
+        if (
+          alpacaOrder.status === "canceled" &&
+          dbOrder.purpose === "phase_tp" &&
+          dbOrder.status !== "canceled"
+        ) {
+          logger.warn(
+            `⚠️ Phase TP order canceled for ${dbOrder.symbol} Phase ${dbOrder.phase}`
+          );
+          await this.handleCanceledPhaseTakeProfit(dbOrder);
         }
       }
     }
+  }
+
+  /**
+   * 🆕 Handle canceled phase take-profit orders
+   * Automatically re-places the order if the trade is still active
+   */
+  async handleCanceledPhaseTakeProfit(dbOrder) {
+    const db = database.getDb();
+
+    try {
+      // Get the trade
+      const trade = await db("trades").where("id", dbOrder.trade_id).first();
+
+      if (!trade) {
+        logger.error(`Trade ${dbOrder.trade_id} not found`);
+        return;
+      }
+
+      // Only re-place if trade is still active and in the same phase
+      if (trade.status !== "active" || trade.current_phase !== dbOrder.phase) {
+        logger.info(
+          `Trade ${trade.symbol} no longer active or phase changed - not re-placing order`
+        );
+        return;
+      }
+
+      // Get the phase details
+      const phase = await db("trade_phases")
+        .where({
+          trade_id: dbOrder.trade_id,
+          phase_number: dbOrder.phase,
+        })
+        .first();
+
+      if (!phase || phase.status !== "active") {
+        logger.info(
+          `Phase ${dbOrder.phase} for ${trade.symbol} is not active - not re-placing order`
+        );
+        return;
+      }
+
+      // Check if there's already a new order for this phase
+      const existingOrder = await db("orders")
+        .where({
+          trade_id: dbOrder.trade_id,
+          phase: dbOrder.phase,
+          purpose: "phase_tp",
+        })
+        .whereIn("status", ["new", "accepted", "pending_new"])
+        .first();
+
+      if (existingOrder) {
+        logger.info(
+          `Phase ${dbOrder.phase} for ${trade.symbol} already has an active order - skipping`
+        );
+        return;
+      }
+
+      logger.info(
+        `🔄 Re-placing Phase ${dbOrder.phase} TP order for ${trade.symbol}`
+      );
+
+      // Re-place the OCO order (TP + SL)
+      await this.replacePhaseTakeProfitOrder(trade, phase);
+
+      // Send notification
+      await NotificationService.send({
+        type: "info",
+        title: "🔄 Order Auto-Replaced",
+        message: `Phase ${phase.phase_number} take-profit order for ${trade.symbol} was canceled and has been automatically re-placed.`,
+        tradeId: trade.id,
+      });
+    } catch (error) {
+      logger.error(
+        `Error handling canceled phase TP for order ${dbOrder.id}:`,
+        error
+      );
+
+      // Send error notification
+      await NotificationService.send({
+        type: "error",
+        title: "⚠️ Failed to Re-place Order",
+        message: `Could not automatically re-place Phase ${dbOrder.phase} order for ${dbOrder.symbol}: ${error.message}`,
+        tradeId: dbOrder.trade_id,
+      });
+    }
+  }
+
+  /**
+   * 🆕 Re-place phase take-profit OCO order
+   */
+  async replacePhaseTakeProfitOrder(trade, phase) {
+    const db = database.getDb();
+    const AlpacaService = require("./AlpacaService");
+
+    const tpPrice = parseFloat(phase.take_profit_price);
+    const slPrice = parseFloat(phase.stop_loss_price);
+    const sharesToSell = phase.shares_to_sell;
+
+    logger.order("Re-placing Phase TP OCO order", {
+      tradeId: trade.id,
+      symbol: trade.symbol,
+      phase: phase.phase_number,
+      tpPrice,
+      slPrice,
+      sharesToSell,
+    });
+
+    // Place OCO order (Take Profit + Stop Loss)
+    const ocoOrder = await AlpacaService.placeOCOOrder({
+      symbol: trade.symbol,
+      qty: sharesToSell,
+      takeProfitPrice: tpPrice,
+      stopLossPrice: slPrice,
+      clientOrderId: `RZE-P${phase.phase_number}-OCO-${trade.trade_uuid}`,
+    });
+
+    // Save the new order to database
+    await db("orders").insert({
+      trade_id: trade.id,
+      alpaca_order_id: ocoOrder.id,
+      client_order_id: ocoOrder.client_order_id,
+      symbol: trade.symbol,
+      side: "sell",
+      order_type: "limit",
+      order_class: "oco",
+      qty: sharesToSell,
+      limit_price: tpPrice,
+      stop_price: slPrice,
+      time_in_force: "gtc",
+      phase: phase.phase_number,
+      purpose: "phase_tp",
+      status: ocoOrder.status,
+      alpaca_response: JSON.stringify(ocoOrder),
+    });
+
+    logger.success(
+      `✅ Re-placed Phase ${phase.phase_number} TP order for ${trade.symbol}`
+    );
+  }
+
+  /**
+   * 🆕 Additional helper: Check for orphaned phases
+   * Finds active phases without corresponding orders and places them
+   */
+  async checkOrphanedPhases() {
+    const db = database.getDb();
+
+    logger.info("🔍 Checking for orphaned phases (phases without orders)");
+
+    // Get all active trades
+    const activeTrades = await db("trades")
+      .where("status", "active")
+      .select("*");
+
+    for (const trade of activeTrades) {
+      // Get active phases for this trade
+      const activePhases = await db("trade_phases")
+        .where({
+          trade_id: trade.id,
+          status: "active",
+        })
+        .select("*");
+
+      for (const phase of activePhases) {
+        // Check if this phase has an active order
+        const existingOrder = await db("orders")
+          .where({
+            trade_id: trade.id,
+            phase: phase.phase_number,
+            purpose: "phase_tp",
+          })
+          .whereIn("status", ["new", "accepted", "pending_new"])
+          .first();
+
+        if (!existingOrder) {
+          logger.warn(
+            `⚠️ Orphaned phase detected: ${trade.symbol} Phase ${phase.phase_number} has no active order`
+          );
+
+          // Re-place the order
+          await this.replacePhaseTakeProfitOrder(trade, phase);
+
+          // Send notification
+          await NotificationService.send({
+            type: "warning",
+            title: "⚠️ Orphaned Phase Detected",
+            message: `Phase ${phase.phase_number} for ${trade.symbol} had no active order. Order has been placed.`,
+            tradeId: trade.id,
+          });
+        }
+      }
+    }
+
+    logger.info("✅ Orphaned phase check complete");
   }
 }
 
