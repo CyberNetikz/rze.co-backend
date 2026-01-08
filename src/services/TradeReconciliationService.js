@@ -1,18 +1,13 @@
 /**
  * Trade Reconciliation System
  *
- * Detects and fixes missed order fill events by comparing:
- * 1. Database state
- * 2. Actual Alpaca positions
- * 3. Alpaca order history
- *
- * Admin-controlled lifecycle (start / stop)
+ * Console-only logging (PM2 safe)
+ * No Winston usage
  */
 
 const database = require("../config/database");
 const TradeExecutionService = require("./TradeExecutionService");
 const NotificationService = require("./NotificationService");
-const logger = require("../utils/logger");
 
 class TradeReconciliationService {
   constructor() {
@@ -20,7 +15,7 @@ class TradeReconciliationService {
     this.isRunning = false;
     this.reconcileInterval = null;
 
-    // ⏱ Run every 2 minutes
+    // Run every 2 minutes
     this.intervalMs = 2 * 60 * 1000;
   }
 
@@ -30,14 +25,11 @@ class TradeReconciliationService {
 
   async start() {
     if (this.isRunning) {
-      logger.warn("Trade reconciliation already running");
       console.warn("Trade reconciliation already running");
       return;
     }
 
-    logger.info("🔄 Starting Trade Reconciliation Service...");
     console.log("🔄 Starting Trade Reconciliation Service...");
-
     this.isRunning = true;
 
     await this.safeReconcile();
@@ -47,12 +39,10 @@ class TradeReconciliationService {
       this.intervalMs
     );
 
-    logger.log("✅ Trade Reconciliation Service started");
     console.log("✅ Trade Reconciliation Service started");
   }
 
   async stop() {
-    logger.info("🛑 Stopping Trade Reconciliation Service...");
     console.log("🛑 Stopping Trade Reconciliation Service...");
 
     this.isRunning = false;
@@ -62,7 +52,6 @@ class TradeReconciliationService {
       this.reconcileInterval = null;
     }
 
-    logger.log("🧹 Trade Reconciliation Service stopped");
     console.log("🧹 Trade Reconciliation Service stopped");
   }
 
@@ -70,7 +59,6 @@ class TradeReconciliationService {
     if (!this.isRunning) return;
 
     if (this.isReconciling) {
-      logger.warn("⏳ Reconciliation already in progress — skipping");
       console.warn("⏳ Reconciliation already in progress — skipping");
       return;
     }
@@ -78,7 +66,6 @@ class TradeReconciliationService {
     try {
       await this.reconcileAllTrades();
     } catch (error) {
-      logger.error("❌ Reconciliation failed:", error);
       console.error("❌ Reconciliation failed:", error);
 
       await NotificationService.send({
@@ -95,8 +82,6 @@ class TradeReconciliationService {
 
   async reconcileAllTrades() {
     this.isReconciling = true;
-
-    logger.info("🔍 Running trade reconciliation...");
     console.log("🔍 Running trade reconciliation...");
 
     try {
@@ -108,7 +93,6 @@ class TradeReconciliationService {
         .select("*");
 
       if (activeTrades.length === 0) {
-        logger.info("No active trades to reconcile");
         console.log("No active trades to reconcile");
         return;
       }
@@ -120,7 +104,6 @@ class TradeReconciliationService {
         await this.reconcileTrade(trade, positionMap);
       }
 
-      logger.log("✅ Trade reconciliation cycle completed");
       console.log("✅ Trade reconciliation cycle completed");
     } finally {
       this.isReconciling = false;
@@ -128,7 +111,6 @@ class TradeReconciliationService {
   }
 
   async reconcileTrade(trade, positionMap) {
-    logger.info(`🔍 Reconciling ${trade.symbol} (Trade ${trade.id})`);
     console.log(`🔍 Reconciling ${trade.symbol} (Trade ${trade.id})`);
 
     const dbRemainingShares = parseInt(trade.remaining_shares);
@@ -136,16 +118,12 @@ class TradeReconciliationService {
     const actualShares = actualPosition ? parseInt(actualPosition.qty) : 0;
 
     if (dbRemainingShares === actualShares) {
-      logger.debug(`✔ ${trade.symbol} shares match (${actualShares})`);
       console.log(`✔ ${trade.symbol} shares match (${actualShares})`);
       return;
     }
 
-    logger.warn(
-      `⚠️ SHARE DISCREPANCY: ${trade.symbol} | DB: ${dbRemainingShares} | Alpaca: ${actualShares}`
-    );
     console.warn(
-      `⚠️ SHARE DISCREPANCY: ${trade.symbol} | DB: ${dbRemainingShares} | Alpaca: ${actualShares}`
+      `⚠️ SHARE DISCREPANCY | ${trade.symbol} | DB: ${dbRemainingShares} | Alpaca: ${actualShares}`
     );
 
     await this.findMissedEvents(trade, dbRemainingShares, actualShares);
@@ -160,7 +138,6 @@ class TradeReconciliationService {
     const AlpacaService = require("./AlpacaService");
 
     try {
-      logger.info(`🔎 Scanning missed events for ${trade.symbol}`);
       console.log(`🔎 Scanning missed events for ${trade.symbol}`);
 
       const dbOrders = await db("orders")
@@ -182,11 +159,7 @@ class TradeReconciliationService {
         );
 
         if (alpacaOrder.status === "filled" && dbOrder.status !== "filled") {
-          missedFills.push({
-            type: "parent",
-            order: alpacaOrder,
-            dbOrder,
-          });
+          missedFills.push({ type: "parent", order: alpacaOrder, dbOrder });
         }
 
         if (alpacaOrder.order_class === "oco" && alpacaOrder.legs) {
@@ -196,7 +169,6 @@ class TradeReconciliationService {
                 trade.id,
                 leg.id
               );
-
               if (!recorded) {
                 missedFills.push({
                   type: "oco_leg",
@@ -211,9 +183,7 @@ class TradeReconciliationService {
       }
 
       if (missedFills.length === 0) {
-        logger.warn("⚠️ No matching fills found — flagging manual review");
-        console.warn("⚠️ No matching fills found — flagging manual review");
-
+        console.error("🚨 No matching fills found — manual review required");
         await this.flagForManualReview(trade, expectedShares, actualShares);
         return;
       }
@@ -222,7 +192,6 @@ class TradeReconciliationService {
         await this.processMissedFill(trade, missed);
       }
     } catch (error) {
-      logger.error(`Missed event scan failed for ${trade.symbol}`, error);
       console.error(`Missed event scan failed for ${trade.symbol}`, error);
     }
   }
@@ -247,7 +216,6 @@ class TradeReconciliationService {
     const db = database.getDb();
     const { type, order, leg, dbOrder } = missedFill;
 
-    logger.info(`📝 Processing missed fill for ${trade.symbol}`);
     console.log(`📝 Processing missed fill for ${trade.symbol}`);
 
     try {
@@ -266,54 +234,20 @@ class TradeReconciliationService {
       }
 
       if (type === "oco_leg") {
-        const isStop = leg.type === "stop";
-
         const syntheticOrder = {
           ...dbOrder,
           filled_qty: leg.filled_qty,
           filled_avg_price: leg.filled_avg_price,
           filled_at: leg.filled_at,
-          purpose: isStop
-            ? dbOrder.phase === 1
-              ? "remaining_sl"
-              : "phase_sl"
-            : "phase_tp",
+          purpose: leg.type === "stop" ? "phase_sl" : "phase_tp",
         };
 
         await this.handleMissedFillEvent(syntheticOrder, leg);
-
-        await db("order_events").insert({
-          order_id: dbOrder.id,
-          trade_id: trade.id,
-          event_type: "fill",
-          event_data: JSON.stringify({
-            ...leg,
-            reconciliation: true,
-            discovered_at: new Date().toISOString(),
-          }),
-          description: "[RECONCILED] Missed OCO leg fill",
-        });
       }
 
-      logger.log(`✅ Missed fill reconciled for ${trade.symbol}`);
       console.log(`✅ Missed fill reconciled for ${trade.symbol}`);
-
-      await NotificationService.send({
-        type: "warning",
-        title: "🔄 Missed Fill Reconciled",
-        message: `${trade.symbol} missed fill processed`,
-        tradeId: trade.id,
-      });
     } catch (error) {
-      logger.error("Failed processing missed fill", error);
-      console.error("Failed processing missed fill", error);
-
-      await NotificationService.send({
-        type: "error",
-        title: "❌ Reconciliation Error",
-        message: error.message,
-        tradeId: trade.id,
-      });
+      console.error("❌ Failed processing missed fill", error);
     }
   }
 
@@ -321,11 +255,8 @@ class TradeReconciliationService {
     const fillPrice = parseFloat(alpacaOrder.filled_avg_price);
     const filledQty = parseInt(alpacaOrder.filled_qty);
 
-    logger.info(
-      `⚙️ Handling missed fill | Trade ${dbOrder.trade_id} | Purpose ${dbOrder.purpose}`
-    );
     console.log(
-      `⚙️ Handling missed fill | Trade ${dbOrder.trade_id} | Purpose ${dbOrder.purpose}`
+      `⚙️ Handling fill | Trade ${dbOrder.trade_id} | Purpose ${dbOrder.purpose}`
     );
 
     switch (dbOrder.purpose) {
@@ -357,14 +288,9 @@ class TradeReconciliationService {
     }
   }
 
-  /* ===========================
-   * MANUAL REVIEW
-   * =========================== */
-
   async flagForManualReview(trade, expectedShares, actualShares) {
     const db = database.getDb();
 
-    logger.error(`🚨 Manual review required for ${trade.symbol}`);
     console.error(`🚨 Manual review required for ${trade.symbol}`);
 
     await db("reconciliation_issues").insert({
@@ -374,18 +300,7 @@ class TradeReconciliationService {
       actual_shares: actualShares,
       discrepancy: expectedShares - actualShares,
       status: "pending_review",
-      details: JSON.stringify({
-        symbol: trade.symbol,
-        phase: trade.current_phase,
-      }),
       created_at: db.fn.now(),
-    });
-
-    await NotificationService.send({
-      type: "error",
-      title: "🚨 Manual Review Required",
-      message: `${trade.symbol} share mismatch`,
-      tradeId: trade.id,
     });
   }
 }
