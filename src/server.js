@@ -18,6 +18,8 @@ const logger = require("./utils/logger");
 const database = require("./config/database");
 const AlpacaService = require("./services/AlpacaService");
 const TradeMonitor = require("./services/TradeMonitor");
+const TradeReconciliationService = require("./services/TradeReconciliationService");
+
 const WebSocketManager = require("./websocket/WebSocketManager");
 const NotificationService = require("./services/NotificationService");
 
@@ -156,7 +158,12 @@ async function initializeServices() {
     await TradeMonitor.start();
     logger.info("✅ Trade monitor started");
 
-    // 6. Start the server
+     // 6. Start trade Reconciliation Service (watches for missing trade events fill)
+    logger.info("👁️ Starting trade reconciliation...");
+    await TradeReconciliationService.start();
+    logger.info("✅ Trade reconciliation started");
+
+    // 7. Start the server
     const PORT = process.env.PORT || 3001;
     server.listen(PORT, () => {
       logger.info(`✅ Server running on port ${PORT}`);
