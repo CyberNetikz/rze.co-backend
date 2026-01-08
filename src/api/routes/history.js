@@ -18,8 +18,8 @@ router.get('/', async (req, res) => {
   try {
     const db = database.getDb();
     const {
-      status,                // OPTIONAL now
-      result,                // win | loss (only for completed)
+      status,
+      result,
       symbol,
       startDate,
       endDate,
@@ -31,17 +31,12 @@ router.get('/', async (req, res) => {
 
     let query = db('trades');
 
-    /**
-     * Trade status filter (optional)
-     * If not provided → return ALL trades
-     */
+    // Trade status filter (optional)
     if (status) {
       query = query.where('status', status);
     }
 
-    /**
-     * Result filter only applies to completed trades
-     */
+    // Result filter only applies to completed trades
     if (result === 'win') {
       query = query
         .where('status', 'completed')
@@ -57,7 +52,7 @@ router.get('/', async (req, res) => {
       query = query.where('symbol', symbol.toUpperCase());
     }
 
-    // Date filters (use exit_time if exists, fallback to updated_at)
+    // Date filters
     if (startDate) {
       query = query.where('updated_at', '>=', startDate);
     }
@@ -90,14 +85,15 @@ router.get('/', async (req, res) => {
       .offset(parseInt(offset));
 
     /**
-     * Attach order summary per trade
+     * Attach comprehensive data per trade
      */
     const formattedTrades = await Promise.all(trades.map(async (trade) => {
+      // Get order statistics
       const orderStats = await db('orders')
         .where('trade_id', trade.id)
         .select('status');
 
-      const summary = {
+      const orderSummary = {
         total: orderStats.length,
         filled: 0,
         open: 0,
@@ -105,52 +101,138 @@ router.get('/', async (req, res) => {
       };
 
       orderStats.forEach(o => {
-        if (o.status === 'filled') summary.filled++;
+        if (o.status === 'filled') orderSummary.filled++;
         else if (['canceled', 'cancelled', 'rejected', 'expired'].includes(o.status)) {
-          summary.canceled++;
+          orderSummary.canceled++;
         } else {
-          summary.open++;
+          orderSummary.open++;
         }
       });
 
+      // Get phase journey
+      const phases = await db('trade_phases')
+        .where('trade_id', trade.id)
+        .orderBy('phase_number', 'asc')
+        .select('*');
+
+      // Format phase journey
+      const phaseJourney = phases.map(phase => {
+        const phasePnl = phase.phase_pnl ? parseFloat(phase.phase_pnl) : null;
+        const exitPrice = phase.exit_price ? parseFloat(phase.exit_price) : null;
+        
+        return {
+          phase: phase.phase_number,
+          status: phase.status, // pending, active, completed
+          
+          // Target prices
+          take_profit_price: parseFloat(phase.take_profit_price),
+          stop_loss_price: parseFloat(phase.stop_loss_price),
+          take_profit_pct: parseFloat(phase.take_profit_pct),
+          stop_loss_pct: parseFloat(phase.stop_loss_pct),
+          
+          // Execution details
+          shares_to_sell: phase.shares_to_sell,
+          exit_price: exitPrice,
+          exit_type: phase.exit_type, // take_profit, stop_loss, or null if pending
+          
+          // P&L for this phase
+          phase_pnl: phasePnl,
+          phase_pnl_pct: phasePnl && phase.shares_to_sell && trade.entry_price
+            ? ((phasePnl / (parseFloat(trade.entry_price) * phase.shares_to_sell)) * 100).toFixed(4)
+            : null,
+          
+          // Timestamps
+          started_at: phase.started_at,
+          completed_at: phase.completed_at,
+          
+          // Duration if completed
+          duration_minutes: phase.started_at && phase.completed_at
+            ? Math.round((new Date(phase.completed_at) - new Date(phase.started_at)) / 60000)
+            : null
+        };
+      });
+
+      // Calculate trade summary
       const isCompleted = trade.status === 'completed';
       const realizedPnl = parseFloat(trade.realized_pnl || 0);
+      const entryPrice = parseFloat(trade.entry_price);
+      const positionSize = parseFloat(trade.position_size);
 
+      // Get current active phase info
+      const currentPhase = phases.find(p => p.status === 'active') || null;
+      
       return {
+        // Trade identification
         id: trade.id,
         trade_uuid: trade.trade_uuid,
         symbol: trade.symbol,
         company_name: trade.company_name,
 
-        trade_status: trade.status,
+        // Trade status
+        trade_status: trade.status, // active, completed, cancelled
+        current_phase: trade.current_phase,
 
-        entry_price: parseFloat(trade.entry_price),
-        position_size: parseFloat(trade.position_size),
+        // Entry details
+        entry_price: entryPrice,
+        position_size: positionSize,
         total_shares: trade.total_shares,
+        remaining_shares: trade.remaining_shares,
 
+        // Exit details (for completed trades)
         exit_phase: trade.exit_phase,
-        exit_reason: trade.exit_reason,
+        exit_reason: trade.exit_reason, // stopped_out, manual, etc.
 
+        // P&L (only for completed trades)
         realized_pnl: isCompleted ? realizedPnl : null,
         realized_pnl_pct: isCompleted
           ? parseFloat(trade.realized_pnl_pct)
           : null,
 
+        // Result classification
         result: isCompleted
           ? (realizedPnl > 0 ? 'win' : 'loss')
           : null,
 
+        // Unrealized P&L for active trades (if you track current price)
+        // This would require current market price - you'd need to add this logic
+        unrealized_pnl: trade.status === 'active' && currentPhase
+          ? `Calculate based on current market price vs entry_price * remaining_shares`
+          : null,
+
+        // Timing
         entry_time: trade.entry_time,
         exit_time: trade.exit_time,
-
-        duration_minutes:
-          trade.entry_time && trade.exit_time
-            ? Math.round(
-                (new Date(trade.exit_time) - new Date(trade.entry_time)) / 60000
-              )
+        duration_minutes: trade.entry_time && trade.exit_time
+            ? Math.round((new Date(trade.exit_time) - new Date(trade.entry_time)) / 60000)
             : null,
 
-        orders: summary
+        // Template used
+        template_id: trade.template_id,
+        template_name: trade.template_snapshot?.name || null,
+
+        // Order statistics
+        orders: orderSummary,
+
+        // Phase journey - complete history of all phases
+        journey: {
+          total_phases: phases.length,
+          completed_phases: phases.filter(p => p.status === 'completed').length,
+          current_phase_details: currentPhase ? {
+            phase: currentPhase.phase_number,
+            shares_to_sell: currentPhase.shares_to_sell,
+            take_profit_price: parseFloat(currentPhase.take_profit_price),
+            stop_loss_price: parseFloat(currentPhase.stop_loss_price),
+            started_at: currentPhase.started_at
+          } : null,
+          phases: phaseJourney,
+          
+          // Quick stats from journey
+          phases_won: phases.filter(p => p.exit_type === 'take_profit').length,
+          phases_stopped: phases.filter(p => p.exit_type === 'stop_loss').length,
+          total_shares_sold: phases
+            .filter(p => p.status === 'completed')
+            .reduce((sum, p) => sum + p.shares_to_sell, 0)
+        }
       };
     }));
 
@@ -161,6 +243,17 @@ router.get('/', async (req, res) => {
         limit: parseInt(limit),
         offset: parseInt(offset),
         hasMore: parseInt(offset) + formattedTrades.length < parseInt(count)
+      },
+      summary: {
+        // Optional: Add summary statistics
+        total_trades: formattedTrades.length,
+        wins: formattedTrades.filter(t => t.result === 'win').length,
+        losses: formattedTrades.filter(t => t.result === 'loss').length,
+        active: formattedTrades.filter(t => t.trade_status === 'active').length,
+        total_pnl: formattedTrades
+          .filter(t => t.realized_pnl !== null)
+          .reduce((sum, t) => sum + t.realized_pnl, 0)
+          .toFixed(2)
       }
     });
 
