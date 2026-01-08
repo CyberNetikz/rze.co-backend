@@ -11,6 +11,7 @@ const TradeExecutionService = require("./TradeExecutionService");
 const NotificationService = require("./NotificationService");
 const WebSocketManager = require("../websocket/WebSocketManager");
 const logger = require("../utils/logger");
+const TradeReconciliationService = require("./TradeReconciliationService");
 
 class TradeMonitor {
   constructor() {
@@ -409,6 +410,7 @@ class TradeMonitor {
       }
       try {
         await this.syncOrders();
+        await TradeReconciliationService.reconcileAllTrades();
       } catch (error) {
         logger.error("Periodic sync error:", error);
       }
