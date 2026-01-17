@@ -2,6 +2,7 @@
  * Trade Reconciliation System - Enhanced
  *
  * Handles OCO leg fills that may not be recorded in orders table
+ * Now includes detection of standalone OCO legs in Alpaca's order list
  */
 
 const database = require("../config/database");
@@ -141,38 +142,39 @@ class TradeReconciliationService {
         .select("*");
 
       // Get ALL orders from Alpaca (including filled OCO legs)
-      const alpacaOrders = await AlpacaService.getOrders("all");
-      console.log(alpacaOrders, "alpacaOrders");
+      const alpacaOrders = await AlpacaService.getOrders("all", 500);
+      
       const tradeOrderIds = dbOrders.map(o => o.alpaca_order_id);
 
+      // Filter orders related to this trade
       const relevantOrders = alpacaOrders.filter(o =>
         tradeOrderIds.includes(o.id)
       );
 
       const missedFills = [];
 
+      // Check parent orders
       for (const alpacaOrder of relevantOrders) {
         const dbOrder = dbOrders.find(
           o => o.alpaca_order_id === alpacaOrder.id
         );
 
+        if (!dbOrder) continue;
+
         // Check parent order fills
         if (alpacaOrder.status === "filled" && dbOrder.status !== "filled") {
+          console.log(`📍 Found unrecorded parent fill: ${alpacaOrder.id}`);
           missedFills.push({ type: "parent", order: alpacaOrder, dbOrder });
         }
 
-        // Check OCO leg fills - ENHANCED LOGIC
+        // Check OCO leg fills in parent's legs array
         if (alpacaOrder.order_class === "oco" && alpacaOrder.legs) {
           for (const leg of alpacaOrder.legs) {
             if (leg.status === "filled") {
-              // Check if this leg fill is recorded
-              const legRecorded = await this.isLegFillRecorded(
-                trade.id,
-                leg.id
-              );
+              const legRecorded = await this.isLegFillRecorded(trade.id, leg.id);
               
               if (!legRecorded) {
-                console.log(`📍 Found unrecorded OCO leg: ${leg.id}`);
+                console.log(`📍 Found unrecorded OCO leg in parent: ${leg.id}`);
                 missedFills.push({
                   type: "oco_leg",
                   order: alpacaOrder,
@@ -183,48 +185,20 @@ class TradeReconciliationService {
             }
           }
         }
-
-        // NEW: Check for canceled OCO orders where leg might have filled
-        if (alpacaOrder.order_class === "oco" && alpacaOrder.status === "canceled") {
-          console.log(`🔍 Checking canceled OCO for filled legs: ${alpacaOrder.id}`);
-          
-          if (alpacaOrder.legs) {
-            for (const leg of alpacaOrder.legs) {
-              if (leg.status === "filled") {
-                const legRecorded = await this.isLegFillRecorded(
-                  trade.id,
-                  leg.id
-                );
-                
-                if (!legRecorded) {
-                  console.log(`📍 Found filled leg in canceled OCO: ${leg.id}`);
-                  missedFills.push({
-                    type: "oco_leg",
-                    order: alpacaOrder,
-                    leg,
-                    dbOrder,
-                  });
-                }
-              }
-            }
-          }
-        }
       }
+
+      // CRITICAL: Check for standalone OCO legs in Alpaca's order list
+      // These appear as separate orders, not nested in parent.legs
+      console.log(`🔍 Searching for standalone OCO legs for ${trade.symbol}`);
+      await this.findStandaloneOCOLegs(trade, alpacaOrders, dbOrders, missedFills);
 
       if (missedFills.length === 0) {
-        console.log(`🔍 No missed fills found in recorded orders`);
-        console.log(`📊 Checking for orphaned OCO legs...`);
-        
-        // NEW: Search for OCO legs that aren't linked to parent orders
-        await this.findOrphanedOCOLegs(trade, alpacaOrders, missedFills);
-        
-        if (missedFills.length === 0) {
-          console.error("🚨 No matching fills found — manual review required");
-          await this.flagForManualReview(trade, expectedShares, actualShares);
-          return;
-        }
+        console.error("🚨 No matching fills found — manual review required");
+        await this.flagForManualReview(trade, expectedShares, actualShares);
+        return;
       }
 
+      // Process all missed fills
       for (const missed of missedFills) {
         await this.processMissedFill(trade, missed);
       }
@@ -233,44 +207,69 @@ class TradeReconciliationService {
     }
   }
 
-  // NEW METHOD: Find OCO legs that filled but parent was canceled
-  async findOrphanedOCOLegs(trade, alpacaOrders, missedFills) {
+  /**
+   * NEW METHOD: Find standalone OCO legs
+   * 
+   * OCO legs sometimes appear as standalone orders in Alpaca's order list
+   * instead of being nested in the parent order's legs array.
+   * 
+   * Example: IONQ Phase 2 stop-loss (c6507fce-9c14-4305-b9a7-46ea1d862ec7)
+   * appears as a separate order with order_class="oco" but no parent reference
+   */
+  async findStandaloneOCOLegs(trade, alpacaOrders, dbOrders, missedFills) {
     const db = database.getDb();
     
-    console.log(`🔍 Searching for orphaned OCO legs for ${trade.symbol}`);
-    
-    // Get all phases for this trade
+    // Get all active/completed phases for this trade
     const phases = await db("trade_phases")
       .where("trade_id", trade.id)
       .whereIn("status", ["active", "completed"])
       .orderBy("phase_number", "asc");
     
     for (const phase of phases) {
-      console.log(`📋 Checking phase ${phase.phase_number}`);
+      console.log(`📋 Checking phase ${phase.phase_number} for standalone OCO legs`);
       
-      // Find OCO orders for this phase
-      const ocoOrders = await db("orders")
-        .where("trade_id", trade.id)
-        .where("phase", phase.phase_number)
-        .where("purpose", "phase_tp")
-        .where("order_class", "oco");
+      // Find all OCO orders for this phase
+      const phaseOCOOrders = dbOrders.filter(
+        o => o.phase === phase.phase_number && 
+             o.order_class === "oco" &&
+             o.purpose === "phase_tp"
+      );
       
-      for (const ocoOrder of ocoOrders) {
-        const alpacaOrder = alpacaOrders.find(o => o.id === ocoOrder.alpaca_order_id);
+      for (const ocoOrder of phaseOCOOrders) {
+        // Look for standalone OCO legs in Alpaca's order list
+        // These will have order_class="oco" and match the symbol/qty
+        const potentialLegs = alpacaOrders.filter(o => 
+          o.symbol === trade.symbol &&
+          o.order_class === "oco" &&
+          o.side === "sell" &&
+          o.status === "filled" &&
+          // NOT the parent order itself
+          o.id !== ocoOrder.alpaca_order_id
+        );
         
-        if (!alpacaOrder || !alpacaOrder.legs) continue;
-        
-        // Check both legs
-        for (const leg of alpacaOrder.legs) {
-          if (leg.status === "filled") {
-            const recorded = await this.isLegFillRecorded(trade.id, leg.id);
+        for (const potentialLeg of potentialLegs) {
+          // Check if this leg matches the phase's expected qty/prices
+          const isStopLeg = potentialLeg.type === "stop" && 
+                           Math.abs(parseFloat(potentialLeg.stop_price) - parseFloat(ocoOrder.stop_price)) < 0.01;
+          
+          const isLimitLeg = potentialLeg.type === "limit" && 
+                            Math.abs(parseFloat(potentialLeg.limit_price) - parseFloat(ocoOrder.limit_price)) < 0.01;
+          
+          if (isStopLeg || isLimitLeg) {
+            // Check if already recorded
+            const recorded = await this.isLegFillRecorded(trade.id, potentialLeg.id);
             
             if (!recorded) {
-              console.log(`✨ Found orphaned filled leg: ${leg.id} (Phase ${phase.phase_number})`);
+              console.log(`✨ Found standalone OCO ${potentialLeg.type} leg: ${potentialLeg.id}`);
+              console.log(`   Phase ${phase.phase_number}, ${potentialLeg.filled_qty} shares @ ${potentialLeg.filled_avg_price}`);
+              
               missedFills.push({
                 type: "oco_leg",
-                order: alpacaOrder,
-                leg,
+                order: {
+                  ...ocoOrder,
+                  id: ocoOrder.alpaca_order_id,
+                },
+                leg: potentialLeg,
                 dbOrder: ocoOrder,
               });
             }
@@ -314,6 +313,16 @@ class TradeReconciliationService {
             updated_at: db.fn.now(),
           });
 
+        // Create order event
+        await db("order_events").insert({
+          order_id: dbOrder.id,
+          trade_id: trade.id,
+          event_type: "fill",
+          event_data: order,
+          description: `Order fill: ${trade.symbol} ${order.side} ${order.filled_qty}/${order.qty} @ ${order.filled_avg_price}`,
+          event_time: order.filled_at,
+        });
+
         await this.handleMissedFillEvent(dbOrder, order);
       }
 
@@ -322,6 +331,20 @@ class TradeReconciliationService {
         const purpose = leg.type === "stop" ? "phase_sl" : "phase_tp";
         
         console.log(`🎯 OCO leg type: ${leg.type}, purpose: ${purpose}, phase: ${dbOrder.phase}`);
+
+        // Create order event for the leg
+        await db("order_events").insert({
+          order_id: dbOrder.id,
+          trade_id: trade.id,
+          event_type: "fill",
+          event_data: {
+            ...leg,
+            parent_order_id: order.id,
+            leg_id: leg.id,
+          },
+          description: `OCO ${leg.type} leg fill: ${trade.symbol} ${leg.side} ${leg.filled_qty}/${leg.qty} @ ${leg.filled_avg_price}`,
+          event_time: leg.filled_at,
+        });
 
         const syntheticOrder = {
           ...dbOrder,
@@ -337,6 +360,7 @@ class TradeReconciliationService {
       console.log(`✅ Missed fill reconciled for ${trade.symbol}`);
     } catch (error) {
       console.error("❌ Failed processing missed fill", error);
+      throw error;
     }
   }
 
