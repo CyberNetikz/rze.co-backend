@@ -141,7 +141,7 @@ class TradeReconciliationService {
         .select("*");
 
       // Get ALL orders from Alpaca (including filled OCO legs)
-      const alpacaOrders = await AlpacaService.getOrders("all", 500);
+      const alpacaOrders = await AlpacaService.getOrders("all");
       const tradeOrderIds = dbOrders.map(o => o.alpaca_order_id);
 
       const relevantOrders = alpacaOrders.filter(o =>
